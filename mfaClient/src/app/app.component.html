@@ -1,0 +1,38 @@
+<div class="p-4">
+  <h1 class="text-xl font-bold">MFA Demo (Angular + SignalR)</h1>
+
+  <div class="mt-4">
+    <label>Email:</label>
+    <input [(ngModel)]="email" class="border p-1" />
+    <br />
+    <label>Password:</label>
+    <input [(ngModel)]="password" type="password" class="border p-1" />
+  </div>
+
+  <div class="mt-4 space-x-2">
+    <button (click)="doLogin()" class="bg-blue-500 text-white px-3 py-1 rounded">
+      🔑 Login
+    </button>
+    <button (click)="doExchange()" class="bg-green-500 text-white px-3 py-1 rounded">
+      🔄 Exchange
+    </button>
+  </div>
+
+  <div class="mt-6">
+    <h2 class="font-semibold">Challenges</h2>
+    <ul>
+      <li *ngFor="let c of challenges">
+        {{ c.id }} ({{ c.method }})
+      </li>
+    </ul>
+  </div>
+
+  <div class="mt-4" *ngIf="approvedId">
+    ✅ Challenge Approved: {{ approvedId }}
+  </div>
+
+  <div class="mt-4" *ngIf="token">
+    <h2 class="font-semibold">JWT Token:</h2>
+    <textarea readonly class="w-full h-24 border">{{ token }}</textarea>
+  </div>
+</div>

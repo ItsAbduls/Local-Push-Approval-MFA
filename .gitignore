@@ -361,3 +361,14 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Node.js
+# ========================
+# The node_modules folder can get very large and is not necessary to check in,
+# as dependencies can be reinstalled with `npm install`.
+node_modules/
+
+# Ignore npm debug logs
+npm-debug.log
+npm-debug.log.*
+.env

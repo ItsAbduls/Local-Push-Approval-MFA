@@ -1,70 +1,36 @@
-﻿using System.Net.Http.Json;
+﻿using MfaDemo;
+using Microsoft.AspNetCore.SignalR.Client;
+using System.Net.Http.Json;
 
-var client = new HttpClient { BaseAddress = new Uri("https://localhost:7244") };
-// adjust if different port
+Console.WriteLine("📱 MFA Console Simulator with SignalR Started...");
 
-Console.WriteLine("📱 MFA Console Simulator Started...");
-Console.WriteLine("Supports Push + TOTP fallback");
+var connection = new HubConnectionBuilder()
+    .WithUrl("https://localhost:7244/hubs/auth") // your API URL
+    .WithAutomaticReconnect()
+    .Build();
 
-// Choose mode
-Console.WriteLine("\nSelect Mode: (1) Push Approval  (2) TOTP Verification");
-var mode = Console.ReadLine();
-
-if (mode == "2")
+// Event: new challenge received
+connection.On<ChallengeDto>("ReceiveChallenge", async (challenge) =>
 {
-    // === TOTP Flow ===
-    Console.Write("Enter user email: ");
-    var email = Console.ReadLine();
+    Console.WriteLine($"\n🚨 New login attempt: ID={challenge.Id}, User={challenge.UserId}, Method={challenge.Method}");
+    Console.Write("Approve? (y/n): ");
+    var key = Console.ReadKey();
+    Console.WriteLine();
 
-    while (true)
+    if (key.KeyChar == 'y')
     {
-        Console.Write("Enter TOTP code from authenticator: ");
-        var code = Console.ReadLine();
-
-        var response = await client.PostAsJsonAsync("/api/verify-totp", new { email, code });
-        var result = await response.Content.ReadAsStringAsync();
-
-        Console.WriteLine($"Server Response: {result}");
-        Console.WriteLine("Try again or press Ctrl+C to exit.\n");
+        var client = new HttpClient { BaseAddress = new Uri("https://localhost:7244") };
+        await client.PostAsJsonAsync("/api/approve", new { challengeId = challenge.Id });
+        Console.WriteLine("✅ Approved!");
     }
-}
-else
+});
+
+// Event: challenge approved
+connection.On<Guid>("ChallengeApproved", (id) =>
 {
-    // === Push Flow ===
-    Console.WriteLine("Polling for Push challenges... (Ctrl+C to exit)");
+    Console.WriteLine($"✅ Challenge {id} approved!");
+});
 
-    while (true)
-    {
-        try
-        {
-            var challenges = await client.GetFromJsonAsync<List<ChallengeDto>>("/api/pending-challenges");
-
-            if (challenges is { Count: > 0 })
-            {
-                Console.WriteLine("\n=== Pending Challenges ===");
-                foreach (var ch in challenges)
-                {
-                    Console.WriteLine($"ID: {ch.Id} | User: {ch.UserId} | Method: {ch.Method}");
-                }
-
-                Console.Write("Enter Challenge ID to approve (or press Enter to skip): ");
-                var input = Console.ReadLine();
-
-                if (!string.IsNullOrWhiteSpace(input) && Guid.TryParse(input, out var challengeId))
-                {
-                    var response = await client.PostAsJsonAsync("/api/approve", new { challengeId });
-                    var result = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"✅ {result}");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"⚠️ Error: {ex.Message}");
-        }
-
-        await Task.Delay(5000); // poll every 5 sec
-    }
-}
-
-record ChallengeDto(Guid Id, Guid UserId, string Method);
+await connection.StartAsync();
+Console.WriteLine("Connected to SignalR hub. Waiting for challenges...");
+await Task.Delay(-1); // keep console running

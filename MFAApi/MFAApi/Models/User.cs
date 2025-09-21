@@ -8,4 +8,7 @@
     }
 
     public record ApproveRequest(Guid ChallengeId);
+
+    public record LoginRequest(string Email, string Password);
+    public record ExchangeRequest(Guid ChallengeId);
 }

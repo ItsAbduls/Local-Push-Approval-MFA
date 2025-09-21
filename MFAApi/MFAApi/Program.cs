@@ -1,11 +1,12 @@
 ﻿using MFAApi.Data;
 using MFAApi.Models;
 using MFAApi.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.OpenApi.Models;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -25,11 +26,15 @@ builder.Services.AddScoped<TotpService>();
 builder.Services.AddSignalR();
 
 // CORS
-builder.Services.AddCors(opt =>
+// Add CORS policy
+builder.Services.AddCors(options =>
 {
-    opt.AddPolicy("AllowAll", b =>
+    options.AddPolicy("AllowAngular", policy =>
     {
-        b.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+        policy.WithOrigins("http://localhost:4200") // Angular dev URL
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials(); // 🔑 Important for SignalR
     });
 });
 
@@ -93,7 +98,7 @@ var app = builder.Build();
 
 // -------------------- Middleware --------------------
 
-app.UseCors("AllowAll");
+app.UseCors("AllowAngular");
 
 app.UseAuthentication(); // <-- JWT middleware
 app.UseAuthorization();
@@ -134,23 +139,45 @@ app.MapPost("/api/register", async (AppDbContext db, string email, string passwo
     .AllowAnonymous()
     .WithName("RegisterUser").WithTags("Authentication");
 
-app.MapPost("/api/login", async (AppDbContext db, ChallengeService challenges, string email, string password) =>
+// Login endpoint → broadcast challenge
+app.MapPost("/api/login", async (
+    AppDbContext db,
+    ChallengeService challenges,
+    IHubContext<AuthHub> hub,
+    [FromBody] LoginRequest request) =>
 {
-    var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
-    if (user == null || !BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+    var user = await db.Users.FirstOrDefaultAsync(u => u.Email == request.Email);
+    if (user == null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
         return Results.Unauthorized();
 
     var challenge = await challenges.CreateChallengeAsync(user.Id, "Push");
+
+    // broadcast via SignalR
+    await hub.Clients.All.SendAsync("ReceiveChallenge", new
+    {
+        challenge.Id,
+        challenge.UserId,
+        challenge.Method
+    });
+
     return Results.Ok(new { challengeId = challenge.Id, method = challenge.Method });
 })
     .AllowAnonymous()
-    .WithName("Login").WithTags("Authentication");
+    .WithName("Login")
+    .WithTags("Authentication");
 
 
-app.MapPost("/api/approve", async (ChallengeService challenges, ApproveRequest request) =>
+
+// Approve endpoint → broadcast approval
+app.MapPost("/api/approve", async (ChallengeService challenges, IHubContext<AuthHub> hub, ApproveRequest request) =>
 {
-    var result = await challenges.MarkApproved(request.ChallengeId);
-    return result ? Results.Ok("Approved") : Results.BadRequest("Invalid challenge");
+    var success = await challenges.MarkApproved(request.ChallengeId);
+    if (success)
+    {
+        await hub.Clients.All.SendAsync("ChallengeApproved", request.ChallengeId);
+        return Results.Ok("Approved ✅");
+    }
+    return Results.BadRequest("Invalid challenge");
 })
     .AllowAnonymous()
     .WithName("ApproveChallenge").WithTags("Authentication");
@@ -167,20 +194,28 @@ app.MapGet("/api/pending-challenges", async (AppDbContext db) =>
     .WithName("PendingChallenges").WithTags("Admin");
 
 // Protected endpoints (JWT will be required later if you add RequireAuthorization)
-app.MapPost("/api/exchange", async (AppDbContext db, ChallengeService challenges, JwtService jwt, Guid challengeId) =>
+app.MapPost("/api/exchange", async (
+    AppDbContext db,
+    ChallengeService challenges,
+    JwtService jwt,
+    [FromBody] ExchangeRequest request) =>
 {
-    var ch = await db.LoginChallenges.FindAsync(challengeId);
-    if (ch is null || ch.Status != "Approved") return Results.BadRequest("Not approved");
+    var ch = await db.LoginChallenges.FindAsync(request.ChallengeId);
+    if (ch is null || ch.Status != "Approved")
+        return Results.BadRequest("Not approved");
 
     var user = await db.Users.FindAsync(ch.UserId);
     if (user is null) return Results.BadRequest();
 
     var token = jwt.Generate(user);
-    await challenges.MarkConsumed(challengeId);
+    await challenges.MarkConsumed(request.ChallengeId);
+
     return Results.Ok(new { token });
 })
-    .AllowAnonymous()
-    .WithName("ExchangeChallenge").WithTags("Authentication");
+.AllowAnonymous()
+.WithName("ExchangeChallenge")
+.WithTags("Authentication");
+
 
 app.MapPost("/api/verify-totp", async (AppDbContext db, TotpService totp, JwtService jwt, string email, string code) =>
 {
